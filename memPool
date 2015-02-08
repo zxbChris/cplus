@@ -1,0 +1,147 @@
+#ifndef MEMORY_H
+#define MEMORY_H
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+template<int ints>
+class __default_memalloc_{
+    enum{_ALIGN_=8};
+    enum{_MAXBYTES_=128};
+    enum{_FREELIST_=_MAXBYTES_/_ALIGN_};
+    static char* start_free;
+    static char* end_free;
+    static size_t heap;
+    union obj{
+      union obj* next;
+      char  data[1];
+    };
+   static obj* volatile freeList[_FREELIST_];
+  static size_t ROUND_UP(size_t bytes)
+   {
+     return (bytes+_ALIGN_-1)& (~(_ALIGN_-1));
+   }
+  static int FREELIST_INDEX(size_t bytes)
+   {
+     return ((bytes+_ALIGN_)/_ALIGN_ -1);
+   }
+
+public:
+   static void* allocate(size_t n);
+   static void  deallocate(void* p,size_t n);
+private:
+   static void* refill(size_t n);
+   static char* chunk_alloc(size_t n,int& objn);
+};
+
+template<int ints> char* __default_memalloc_<ints>::start_free=0;
+template<int ints> char* __default_memalloc_<ints>::end_free=0;
+template<int ints> size_t __default_memalloc_<ints>::heap=0;
+template<int ints> typename __default_memalloc_<ints>::obj*volatile __default_memalloc_<ints>::freeList[]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+ template<int ints> void* __default_memalloc_<ints>::allocate(size_t n){
+  if(n>_MAXBYTES_)
+    return malloc(n);
+  obj*volatile* tmp=freeList+FREELIST_INDEX(n);
+  void* result;
+  if(*tmp)
+  {
+      result=(void*)*tmp;
+      *tmp=((obj*)result)->next;
+  }else{
+     result=refill(ROUND_UP(n));
+  }
+  return (void*)result;
+}
+
+template<int ints> void __default_memalloc_<ints>::deallocate(void *p, size_t n)
+{
+    if(n>_MAXBYTES_)
+    {
+        free(p);
+        return;
+    }
+     obj*volatile* tmp=freeList+FREELIST_INDEX(n);
+    if(*tmp){
+    (( obj*)p)->next=(*tmp);
+     *tmp=(( obj*)p);
+    }else{
+      *tmp=(obj*)tmp;
+    }
+}
+//the refill routine's paramenter n has been ROUND_UP to 8's times
+//The free list don't have the aptative memory , so apply it in the
+//memory pool,then will use chunk_alloc
+//the chunk_alloc will allocate n* nobj bytes
+//But may not return 20
+template<int ints> void* __default_memalloc_<ints>::refill(size_t n)
+{
+     int nobj=20;
+     char* chunk=chunk_alloc(n,nobj);
+      obj* current=( obj*)(chunk+n);
+     obj* nextObj;
+     void* result=(void*)(chunk);
+     if(1==nobj)//return just on
+        return result;
+     //adjust the freeList
+      nextObj=current;
+     obj*volatile* myfreeList=freeList+FREELIST_INDEX(n);
+     *myfreeList=nextObj;
+     for(int i=1;;i++)
+     {   current=nextObj;
+         nextObj=(obj*)((char*)nextObj+n);
+         if(nobj-1==i){
+          current->next=0;
+         break;
+        }else{
+          current->next=nextObj;
+       }
+     }
+     return result;
+}
+//alloc memory from the memory pool
+template<int ints> char* __default_memalloc_<ints>::chunk_alloc(size_t n, int &objn)
+{
+   size_t totalBytes=n*objn;
+   size_t leftBytes=end_free-start_free;
+   char* result=start_free;
+   if(totalBytes<=leftBytes)
+    {
+          start_free+=totalBytes;
+          return result;
+    }else if(leftBytes>=n){
+        objn=leftBytes/n;
+        start_free+=n*objn;
+        return result;
+    }else{
+       size_t get_new_bytes=2*totalBytes+ROUND_UP(heap>>4);
+       if(leftBytes>0)
+       {
+          obj* volatile* myfreelist=freeList+FREELIST_INDEX(leftBytes);
+          obj* tmp=(obj*)(start_free);
+          tmp->next=(*myfreelist);
+          *myfreelist=tmp;
+       }
+         start_free=(char*)malloc(get_new_bytes);
+         if(0==start_free)
+         {    obj* volatile* myfreelist;
+             for(size_t size=n;size<=_MAXBYTES_;size+=_ALIGN_)
+             {
+                 myfreelist=freeList+FREELIST_INDEX(size);
+                 if(*myfreelist){
+                    start_free=(char*)(*myfreelist);
+                    *myfreelist=(*myfreelist)->next;
+                    end_free=start_free+size;
+                    return chunk_alloc(n,objn);
+                 }
+             }
+             end_free=0;
+             std::cerr<<"------There is no memory for alloc-------"<<std::endl;
+             return NULL;
+         }
+         end_free=start_free+get_new_bytes;
+         heap+=get_new_bytes;
+         return chunk_alloc(n,objn);
+       }
+  }
+typedef __default_memalloc_<0>  myAlloc;
+#endif // MEMORY_H
